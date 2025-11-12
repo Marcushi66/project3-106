@@ -1,0 +1,213 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Seasonal Greening: Exploring Global Vegetation Change (MODIS)</title>
+  <script type="module" src="https://cdn.jsdelivr.net/npm/d3@7.9.0/+esm"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/topojson-client@3"></script>
+  <style>
+    :root{
+      --bg:#0b1020; --panel:#121a34; --text:#e6ebff; --muted:#9db2ff;
+      --accent:#7cc77c; --stroke:#2a355d;
+    }
+    *{box-sizing:border-box}
+    body{margin:0;font:16px/1.5 system-ui; color:var(--text);
+         background:radial-gradient(1200px 600px at 70% -10%, #1c2650 0%, var(--bg) 60%)}
+    header{padding:28px 20px 10px;text-align:center}
+    h1{margin:0;font-size:clamp(20px,3.8vw,36px)}
+    .subtitle{color:var(--muted);margin-top:8px;font-size:clamp(12px,1.8vw,16px)}
+    .wrap{max-width:1100px;margin:16px auto;padding:0 16px}
+    .panel{background:var(--panel);border:1px solid var(--stroke);border-radius:18px;
+           box-shadow:0 6px 30px rgba(0,0,0,.25)}
+    .grid{display:grid;grid-template-columns:1.2fr minmax(260px,.8fr);gap:16px}
+    .controls{display:flex;gap:14px;flex-wrap:wrap;align-items:center;padding:14px 16px;
+              border-bottom:1px solid var(--stroke)}
+    .control{display:flex;align-items:center;gap:10px;background:#0f1732;padding:10px 12px;
+             border-radius:12px;border:1px solid var(--stroke)}
+    input[type="range"]{accent-color:var(--accent);width:220px}
+    .viz{padding:10px}
+    .legend{display:flex;align-items:center;gap:10px;padding:0 16px 16px}
+    .legend .bar{height:12px;flex:1;border-radius:6px;border:1px solid var(--stroke);
+                 background:linear-gradient(90deg,#5a3d1e,#7da65e,#94cf88,#b7e3a7)}
+    .legend small{color:var(--muted)}
+    .aside{padding:16px}
+    .aside h3{margin:0 0 8px 0}
+    .aside ul{margin:10px 0 0 18px;color:var(--muted)}
+    .aside li{margin:6px 0}
+    footer{max-width:1100px;margin:8px auto 28px;color:#a5b5ff80;font-size:13px;text-align:center}
+    .pill{display:inline-block;font-size:12px;padding:4px 8px;border-radius:999px;background:#0f1732;
+          border:1px solid var(--stroke);color:var(--muted)}
+    .tooltip{position:fixed;pointer-events:none;transform:translate(-50%,-140%);
+             background:#0c132a;color:var(--text);border:1px solid var(--stroke);
+             padding:8px 10px;border-radius:10px;font-size:12px;
+             box-shadow:0 8px 24px rgba(0,0,0,.35);opacity:0;transition:opacity .12s}
+    svg{width:100%;height:auto}
+    #miniChart path{fill:none;stroke:var(--accent);stroke-width:2}
+    #miniChart circle{fill:var(--accent)}
+    #miniChart text{fill:var(--muted);font-size:11px}
+  </style>
+</head>
+<body>
+  <header>
+    <div class="pill">MODIS · Final</div>
+    <h1>Seasonal Greening: Exploring Global Vegetation Change</h1>
+    <div class="subtitle">Interactive D3 World Map · Monthly MODIS NDVI (2024)</div>
+  </header>
+
+  <div class="wrap grid">
+    <section class="panel">
+      <div class="controls">
+        <div class="control">
+          <label for="month">Month</label>
+          <input id="month" type="range" min="1" max="12" value="6" />
+          <span id="monthLabel" class="pill">Jun</span>
+        </div>
+        <div class="control"><span class="pill">Drag</span> to pan · <span class="pill">Scroll</span> to zoom · Hover for details</div>
+      </div>
+
+      <div class="viz">
+        <svg id="world" viewBox="0 0 980 520"></svg>
+      </div>
+
+      <div class="legend">
+        <small>NDVI</small><div class="bar"></div><small>Low</small><small>High</small>
+      </div>
+    </section>
+
+    <aside class="panel aside">
+      <h3 id="asideTitle">Click a Country</h3>
+      <svg id="miniChart" width="260" height="160"></svg>
+      <ul id="asideInfo" style="color:var(--muted)">
+        <li>Click any country on the map to view its NDVI trend (Jan–Dec 2024).</li>
+      </ul>
+    </aside>
+  </div>
+
+  <footer>Source: NASA MODIS/Terra MOD13C2 (2024). Values are monthly country-mean NDVI (0–1).</footer>
+  <div id="tooltip" class="tooltip"></div>
+
+  <script type="module">
+    import * as d3 from "https://cdn.jsdelivr.net/npm/d3@7.9.0/+esm";
+    const svg = d3.select("#world");
+    const g = svg.append("g");
+    const projection = d3.geoNaturalEarth1().scale(190).translate([490, 270]);
+    const path = d3.geoPath(projection);
+    const zoom = d3.zoom().scaleExtent([1,8]).on("zoom", e=>g.attr("transform",e.transform));
+    svg.call(zoom);
+
+    const monthNames=["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+    const monthInput=document.getElementById("month"),monthLabel=document.getElementById("monthLabel");
+    const tooltip=d3.select("#tooltip");
+    const color=d3.scaleSequential(d3.interpolateGreens).domain([0.10,0.85]);
+    const noData="#2a355d";
+
+    // 常见需要改名的国家名 → ISO3
+    const nameToISO = {
+      // 你之前已有的
+      "United States of America":"USA",
+      "United Kingdom":"GBR",
+      "Russia":"RUS",
+      "Venezuela":"VEN",
+      "Bolivia":"BOL",
+      "Congo":"COG",
+      "Democratic Republic of the Congo":"COD",
+      "Ivory Coast":"CIV",
+      "South Korea":"KOR",
+      "North Korea":"PRK",
+      "Czechia":"CZE",
+      "Eswatini":"SWZ",
+      "Bahamas":"BHS",
+      "Gambia":"GMB",
+      "Syria":"SYR",
+      "Laos":"LAO",
+      "Brunei":"BRN",
+      "Micronesia":"FSM",
+      "Türkiye":"TUR",
+      "Myanmar":"MMR",
+      "Cabo Verde":"CPV",
+      "North Macedonia":"MKD",
+      "Timor-Leste":"TLS",
+
+      // 新增关键映射（确保中国等国家有数据）
+      "China":"CHN",
+      "Vietnam":"VNM",
+      "Hong Kong":"HKG",
+      "Macao":"MAC",
+      "Taiwan":"TWN",
+      "Côte d'Ivoire":"CIV",
+      "Cape Verde":"CPV",
+      "United Republic of Tanzania":"TZA",
+      "Svalbard and Jan Mayen":"SJM",  // 即使你没数据，也可避免报错
+      "Palestine":"PSE",
+      "Moldova":"MDA",
+      "Bosnia and Herzegovina":"BIH",
+      "North Cyprus":"CYP",  // 一些 topo 里会出现
+      "Kosovo":"XKX",        // 你的 CSV 可能没有 XKX，后面会打印缺失
+    };
+
+
+    const [world,raw]=await Promise.all([
+      d3.json("https://cdn.jsdelivr.net/npm/world-atlas@2/countries-110m.json"),
+      d3.csv("data/ndvi_country_2024_clean.csv",d3.autoType)
+    ]);
+    const data=raw.filter(d=>/^[A-Z]{3}$/.test(d.iso3)&&d.month>=1&&d.month<=12);
+    const byIso=d3.group(data,d=>d.iso3);
+    const ndviByIsoMonth=new Map([...byIso].map(([iso,rows])=>{
+      const arr=Array(12).fill(null); rows.forEach(r=>{arr[r.month-1]=r.ndvi_mean}); return [iso,arr];
+    }));
+    const countries=topojson.feature(world,world.objects.countries);
+    function getISO3(f){return f.properties.iso_a3||nameToISO[f.properties.name]||null;}
+
+    const countryPaths=g.selectAll("path.country").data(countries.features).join("path")
+      .attr("class","country").attr("d",path)
+      .attr("fill",f=>{
+        const iso=getISO3(f); const s=ndviByIsoMonth.get(iso);
+        const v=s?s[+monthInput.value-1]:null; return v==null?noData:color(v);
+      })
+      .attr("stroke","#1e2a4f").attr("stroke-width",0.6)
+      .on("mousemove",(e,d)=>{
+        const iso=getISO3(d),mIdx=+monthInput.value-1;
+        const s=ndviByIsoMonth.get(iso); const val=s?s[mIdx]:null;
+        tooltip.html(`<strong>${d.properties.name}</strong><br>NDVI: ${(val??"No data")}<br>${monthNames[mIdx]}`)
+          .style("left",(e.clientX+12)+"px").style("top",(e.clientY-12)+"px").style("opacity",1);
+      })
+      .on("mouseleave",()=>tooltip.style("opacity",0))
+      .on("click",(e,d)=>showTrend(d));
+
+    monthInput.addEventListener("input",updateColors);
+    function updateColors(){
+      const mIdx=+monthInput.value-1; monthLabel.textContent=monthNames[mIdx];
+      countryPaths.transition().duration(350)
+        .attr("fill",f=>{
+          const iso=getISO3(f); const s=ndviByIsoMonth.get(iso);
+          const v=s?s[mIdx]:null; return v==null?noData:color(v);
+        });
+    }
+    updateColors();
+
+    // -------- mini line chart --------
+    const mini=d3.select("#miniChart"),mw=+mini.attr("width"),mh=+mini.attr("height");
+    const mx=d3.scaleLinear().domain([1,12]).range([30,mw-10]);
+    const my=d3.scaleLinear().domain([0,1]).range([mh-20,20]);
+    const line=d3.line().x((d,i)=>mx(i+1)).y(d=>my(d));
+
+    function showTrend(f){
+      const iso=getISO3(f),series=ndviByIsoMonth.get(iso);
+      const asideTitle=document.getElementById("asideTitle");
+      const info=document.getElementById("asideInfo");
+      mini.selectAll("*").remove();
+      if(!series){asideTitle.textContent=f.properties.name; info.innerHTML="<li>No data available</li>";return;}
+      asideTitle.textContent=f.properties.name+" ("+iso+")";
+      info.innerHTML=`<li>Average NDVI: ${(d3.mean(series)||0).toFixed(3)}</li>`;
+      // axes
+      mini.append("g").attr("transform",`translate(0,${mh-20})`).call(d3.axisBottom(mx).ticks(12).tickFormat((d,i)=>monthNames[i]).tickSize(0)).selectAll("text").attr("transform","rotate(-45)").attr("x",-10).attr("y",10);
+      mini.append("g").attr("transform","translate(30,0)").call(d3.axisLeft(my).ticks(5));
+      // line
+      mini.append("path").datum(series).attr("d",line).attr("stroke", "#7cc77c").attr("fill","none").attr("stroke-width",2);
+      mini.selectAll("circle").data(series).join("circle")
+          .attr("cx",(d,i)=>mx(i+1)).attr("cy",d=>my(d)).attr("r",2.5).attr("fill","#7cc77c");
+    }
+  </script>
+</body>
+</html>
