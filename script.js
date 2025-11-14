@@ -126,11 +126,14 @@ function showTrend(f) {
   if (!series) {
     asideTitle.textContent = f.properties.name;
     info.innerHTML = "<li>No data available</li>";
+    mini.style("display", "none"); 
     return;
   }
 
   asideTitle.textContent = `${f.properties.name} (${iso})`;
   info.innerHTML = `<li>Average NDVI: ${(d3.mean(series) || 0).toFixed(3)}</li>`;
+
+  mini.style("display", "block");
 
   // Draw axes and line
   mini.append("g")
